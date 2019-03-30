@@ -290,7 +290,7 @@ def draw_orbits(
         orbit_increment = timedelta(minutes=float(orbit_resolution))
 
     satellite.compute(time)
-    previous_altitude = satellite.altitude
+    previous_latitude = satellite.latitude
 
     orbit_markers = []
 
@@ -298,11 +298,11 @@ def draw_orbits(
         satellite.compute(time, plus_seconds=orbit_offset.total_seconds())
 
         if orbit_ascdesc:
-            if satellite.altitude - previous_altitude >= 0:
+            if satellite.latitude - previous_latitude >= 0:
                 char = "+"
             else:
                 char = "-"
-            previous_altitude = satellite.altitude
+            previous_latitude = satellite.latitude
         else:
             char = "•"
 
@@ -439,7 +439,15 @@ def cartesian_rotation(lat, lon, r, steps=128):
 def draw_satellite(layer, body, satellite):
     try:
         x, y = body.from_latlon(satellite.latitude, satellite.longitude)
-        layer.draw(x, y, "X", 16)
+        color = 209 if satellite.is_current else 16
+        if ((not satellite.is_current) and satellite.symbol) or (satellite.is_current and (not satellite.symbol)):
+            for dx in [-1, +1]:
+                for dy in [-1, +1]:
+                    layer.draw(x + dx, y + dy, "•", color)
+        layer.draw(x, y, satellite.direction, color)
+        for i, char in enumerate(satellite.name):
+            layer.draw(x + 2 + i, y, char, color)
+        satellite.symbol = not satellite.symbol
     except ValueError:
         pass
 

@@ -42,6 +42,7 @@ from .utils.curses import (
     INPUT_TOGGLE_ORBIT_APSIDES,
     INPUT_TOGGLE_ORBIT_ASCDESC,
     INPUT_TOGGLE_TOPO,
+    INPUT_FORCE_NEXT_SAT,
 )
 from .utils.text import format_seconds
 
@@ -97,7 +98,7 @@ def render(
         orbits=0,
         paused=False,
         planets="",
-        satellite=None,
+        satellites=None,
         tle=None,
         topo=False,
         **kwargs
@@ -114,7 +115,7 @@ def render(
             night = False
             topo = False
             me = False
-            satellite = None
+            satellites = None
 
         observer_latitude = None
         observer_longitude = None
@@ -130,21 +131,29 @@ def render(
         time_offset = timedelta(0)
         time = datetime.utcnow() + time_offset
         force_redraw = False
+        force_next_sat = False
 
         if paused is True:
             paused = datetime.utcnow()
             force_redraw = True
 
-        if satellite is None and tle is None:
-            satellite_obj = None
+        if satellites is None and tle is None:
+            satellite_objs = [None]
+            current_sat = None
         else:
-            satellite_obj = EarthSatellite(
-                satellite,
-                time,
-                observer_latitude=observer_latitude,
-                observer_longitude=observer_longitude,
-                tle_file=tle,
-            )
+            satellite_objs = []
+            for satellite in satellites:
+                satellite_obj = EarthSatellite(
+                    satellite,
+                    time,
+                    observer_latitude=observer_latitude,
+                    observer_longitude=observer_longitude,
+                    tle_file=tle,
+                )
+                satellite_objs.append(satellite_obj)
+            sat_count = 0
+            current_sat = satellite_objs[sat_count]
+            current_sat.is_current = True
 
         apsides_layer = Layer(draw_apsides, update_timeout=8)
         apsides_layer.hidden = not apsides
@@ -162,12 +171,15 @@ def render(
         observer_layer = Layer(draw_location, update_timeout=None)
         orbit_layer = Layer(draw_orbits)
         planet_layer = Layer(draw_planets)
-        satellite_layer = Layer(draw_satellite)
-        satellite_layer.hidden = satellite_obj is None
+        satellite_layers = []
+        for satellite_obj in satellite_objs:
+            satellite_layer = Layer(draw_satellite)
+            satellite_layer.hidden = satellite_obj is None
+            satellite_layers.append(satellite_layer)
 
         layers = [
             info_layer,
-            satellite_layer,
+            *satellite_layers,
             apsides_layer,
             observer_layer,
             footprint_layer,
@@ -199,27 +211,35 @@ def render(
                     time,
                     observer_latitude=observer_latitude,
                     observer_longitude=observer_longitude,
-                    satellite=satellite_obj,
+                    satellite=current_sat,
                 )
                 map_layer.update(body, time, night=night, topo=topo)
                 observer_layer.update(body, observer_latitude, observer_longitude)
                 planet_layer.update(body, time, planets)
 
-                if satellite_obj is not None:
-                    apsides_layer.update(body, satellite_obj)
-                    coverage_layer.update(body, satellite_obj, time)
-                    crosshair_layer.update(body, satellite_obj)
-                    footprint_layer.update(body, satellite_obj)
+                if current_sat is not None:
+                    apsides_layer.update(body, current_sat)
+                    coverage_layer.update(body, current_sat, time)
+                    crosshair_layer.update(body, current_sat)
+                    footprint_layer.update(body, current_sat)
                     orbit_layer.update(
                         body,
-                        satellite_obj,
+                        current_sat,
                         time,
                         orbits=orbits,
                         orbit_ascdesc=orbit_ascdesc,
                         orbit_resolution=orbit_res,
                     )
-                    satellite_layer.update(body, satellite_obj)
-                    satellite_obj.compute(time)
+                    for satellite_obj, satellite_layer in zip(satellite_objs, satellite_layers):
+                        satellite_layer.update(body, satellite_obj)
+                        satellite_obj.compute(time)
+                    if int(time.timestamp()) % 15 == 0 or force_next_sat:
+                        for satellite_obj in satellite_objs:
+                            satellite_obj.is_current = False
+                        sat_count += 1
+                        current_sat = satellite_objs[sat_count % len(satellites)]
+                        current_sat.is_current = True
+                        force_next_sat = False
 
                 with curses_lock:
                     redraw(stdscr, body, layers)
@@ -243,15 +263,15 @@ def render(
             elif input_action == INPUT_EXIT:
                 break
             elif input_action == INPUT_TIME_MINUS_SHORT:
-                if satellite_obj is None:
+                if current_sat is None:
                     time_offset -= timedelta(minutes=30)
                 else:
-                    time_offset -= satellite_obj.orbital_period / 20
+                    time_offset -= current_sat.orbital_period / 20
             elif input_action == INPUT_TIME_MINUS_LONG:
-                if satellite_obj is None:
+                if current_sat is None:
                     time_offset -= timedelta(hours=6)
                 else:
-                    time_offset -= satellite_obj.orbital_period / 2
+                    time_offset -= current_sat.orbital_period / 2
             elif input_action == INPUT_TIME_PAUSE:
                 if paused:
                     time_offset -= datetime.utcnow() - paused
@@ -259,15 +279,15 @@ def render(
                 else:
                     paused = datetime.utcnow()
             elif input_action == INPUT_TIME_PLUS_SHORT:
-                if satellite_obj is None:
+                if current_sat is None:
                     time_offset += timedelta(minutes=30)
                 else:
-                    time_offset += satellite_obj.orbital_period / 20
+                    time_offset += current_sat.orbital_period / 20
             elif input_action == INPUT_TIME_PLUS_LONG:
-                if satellite_obj is None:
+                if current_sat is None:
                     time_offset += timedelta(hours=6)
                 else:
-                    time_offset += satellite_obj.orbital_period / 2
+                    time_offset += current_sat.orbital_period / 2
             elif input_action == INPUT_TIME_RESET:
                 time_offset = timedelta(0)
                 if paused:
@@ -299,6 +319,8 @@ def render(
             elif input_action == INPUT_TOGGLE_TOPO:
                 topo = not topo
                 map_layer.last_updated = None
+            elif input_action == INPUT_FORCE_NEXT_SAT:
+                force_next_sat = True
     finally:
         quit_event.set()
         input_thread.join()
@@ -368,7 +390,7 @@ def print_version(ctx, param, value):
 @click.option("--version", is_flag=True, callback=print_version,
               expose_value=False, is_eager=True,
               help="Show version and exit")
-@click.argument('satellite', required=False)
+@click.argument('satellites', required=False, nargs=-1)
 def main(**kwargs):
     """
     \b

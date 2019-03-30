@@ -94,6 +94,8 @@ class EarthSatellite(object):
         self.mean_anomaly_at_epoch = float(self._satellite._M.norm)
         self.mean_motion_revs_per_day = self._satellite._n
         self.name = tle[0].strip()
+        self.symbol = True
+        self.is_current = False
         self.observer_elevation = observer_elevation
         self.observer_latitude = observer_latitude
         self.observer_longitude = observer_longitude
@@ -147,6 +149,20 @@ class EarthSatellite(object):
         self._satellite.compute(target_time + self.time_to_apoapsis)
         self.apoapsis_latitude = degrees(self._satellite.sublat)
         self.apoapsis_longitude = degrees(self._satellite.sublong)
+
+        self._satellite.compute(target_time + timedelta(seconds=60))
+        next_lat = degrees(self._satellite.sublat)
+        next_lon = degrees(self._satellite.sublong)
+        northing = self.latitude < next_lat
+        easting = self.longitude < next_lon
+        if northing and easting:
+            self.direction = "↗"
+        elif (not northing) and easting:
+            self.direction = "↘"
+        elif northing and (not easting):
+            self.direction = "↖"
+        else:
+            self.direction = "↙"
 
         if (
             self.observer_latitude is not None and
